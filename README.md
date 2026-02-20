@@ -9,7 +9,7 @@ This repository contains a complete implementation of the **ICT (Inner Circle Tr
 | `ICT_SilverBullet_Strategy.pine` | TradingView | Pine Script v5 |
 | `ICT_SilverBullet_EA.mq5` | MetaTrader 5 | MQL5 |
 
-Both implementations target **Nasdaq (NQ)** and **Gold (XAU)** instruments.
+The Pine strategy is constrained to **Nasdaq (NQ/NAS)** symbols, while the MT5 EA remains configurable for **Nasdaq (NQ)** and **Gold (XAU)** instruments.
 
 ## Strategy Rules
 
