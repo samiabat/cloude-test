@@ -34,6 +34,7 @@ i_swingLen      = input.int(5,    "Swing Detection Lookback", minval = 2, maxval
 i_rrRatio       = input.float(2.0,"Risk : Reward Ratio",      minval = 0.5, maxval = 10.0)
 i_maxDailyLoss  = input.float(2.0,"Max Daily Loss %",         minval = 0.1, maxval = 20.0)
 i_slBuffer      = input.float(0.5,"SL Buffer (ticks beyond FVG)", minval = 0.0, maxval = 50.0)
+i_showSweepMarks= input.bool(false, "Show Sweep X Markers")
 
 // ────────────────────────────────────────────────────────────────────────────
 // TIMEZONE / SESSION HELPERS
@@ -56,12 +57,17 @@ isPastTimeExit() =>
 // True at the start of a new trading day (EST date change).
 // Uses date comparison instead of hour transition for robustness on coarser timeframes.
 isNewDay() =>
-    d  = dayofmonth(time, "America/New_York")
-    d1 = dayofmonth(time[1], "America/New_York")
-    not na(d1) and d != d1
+    y  = year(time, "America/New_York")
+    y1 = year(time[1], "America/New_York")
+    d  = dayofyear(time, "America/New_York")
+    d1 = dayofyear(time[1], "America/New_York")
+    not na(d1) and (y != y1 or d != d1)
 
 inSession   = isInSession()
 pastTimeExit = isPastTimeExit()
+isNasdaq = str.contains(str.upper(syminfo.ticker), "NQ") or str.contains(str.upper(syminfo.ticker), "NAS") or str.contains(str.upper(syminfo.ticker), "USTEC")
+canTrade = isNasdaq
+barConfirmed = barstate.isconfirmed
 
 // Colour the background during the Silver Bullet window.
 bgcolor(inSession ? color.new(color.blue, 93) : na, title = "SB Session")
@@ -100,10 +106,10 @@ if not na(swingLow)
 // LIQUIDITY SWEEP DETECTION
 // ────────────────────────────────────────────────────────────────────────────
 // Buy-side sweep: price wicks above the last swing high then closes back below.
-buySideSweep = not na(lastSwingHigh) and high > lastSwingHigh and close < lastSwingHigh
+buySideSweep = barConfirmed and not na(lastSwingHigh) and high > lastSwingHigh and close < lastSwingHigh
 
 // Sell-side sweep: price wicks below the last swing low then closes back above.
-sellSideSweep = not na(lastSwingLow) and low < lastSwingLow and close > lastSwingLow
+sellSideSweep = barConfirmed and not na(lastSwingLow) and low < lastSwingLow and close > lastSwingLow
 
 // ────────────────────────────────────────────────────────────────────────────
 // MARKET STRUCTURE SHIFT (MSS) — Displacement Detection
@@ -150,26 +156,26 @@ var float shortFVG_bottom   = na
 var float shortSLRef        = na     // displacement swing high for SL
 
 // Latch a new bullish FVG zone when a bullish MSS is confirmed inside the window.
-if bullishMSS and hasBullFVG and inSession and not isDailyLossHit
+if bullishMSS and hasBullFVG and inSession and not isDailyLossHit and canTrade
     pendingLong    := true
     longFVG_top    := bullFVG_top
     longFVG_bottom := bullFVG_bottom
     longSLRef      := low[1]         // displacement candle low
 
 // Latch a new bearish FVG zone when a bearish MSS is confirmed inside the window.
-if bearishMSS and hasBearFVG and inSession and not isDailyLossHit
+if bearishMSS and hasBearFVG and inSession and not isDailyLossHit and canTrade
     pendingShort    := true
     shortFVG_top    := bearFVG_top
     shortFVG_bottom := bearFVG_bottom
     shortSLRef      := high[1]       // displacement candle high
 
 // ── Long Entry: price retraces down into the bullish FVG ──
-longEntry = pendingLong and low <= longFVG_top and close >= longFVG_bottom and
-            inSession and not isDailyLossHit and strategy.position_size == 0
+longEntry = pendingLong and low <= longFVG_top and high >= longFVG_bottom and
+            inSession and not isDailyLossHit and canTrade and strategy.position_size == 0 and barConfirmed
 
 // ── Short Entry: price retraces up into the bearish FVG ──
-shortEntry = pendingShort and high >= shortFVG_bottom and close <= shortFVG_top and
-             inSession and not isDailyLossHit and strategy.position_size == 0
+shortEntry = pendingShort and high >= shortFVG_bottom and low <= shortFVG_top and
+             inSession and not isDailyLossHit and canTrade and strategy.position_size == 0 and barConfirmed
 
 // ────────────────────────────────────────────────────────────────────────────
 // ORDER EXECUTION
@@ -230,9 +236,9 @@ plotshape(longEntry,  title = "Long Entry",  style = shape.triangleup,
 plotshape(shortEntry, title = "Short Entry", style = shape.triangledown,
           location = location.abovebar, color = color.red,   size = size.small)
 
-plotshape(buySideSweep,  title = "Buy-Side Sweep",  style = shape.xcross,
+plotshape(i_showSweepMarks and inSession and buySideSweep,  title = "Buy-Side Sweep",  style = shape.xcross,
           location = location.abovebar, color = color.orange, size = size.tiny)
-plotshape(sellSideSweep, title = "Sell-Side Sweep", style = shape.xcross,
+plotshape(i_showSweepMarks and inSession and sellSideSweep, title = "Sell-Side Sweep", style = shape.xcross,
           location = location.belowbar, color = color.purple, size = size.tiny)
 
 // Show the daily P&L status on the chart.
