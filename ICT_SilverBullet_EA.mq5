@@ -24,7 +24,7 @@
 //+------------------------------------------------------------------+
 //| INPUT PARAMETERS                                                 |
 //+------------------------------------------------------------------+
-input int      InpESTOffset      = -5;     // EST UTC offset (-5 winter, -4 summer)
+input int      InpESTOffset      = -5;     // EST UTC offset (-5 winter / -4 summer; adjust manually for DST)
 input int      InpSessionStart   = 10;     // Session start hour (EST)
 input int      InpSessionEnd     = 11;     // Session end hour (EST)
 input int      InpTimeExitMin    = 15;     // Minutes past session end for time exit
@@ -49,6 +49,8 @@ bool           g_swingLowValid;
 // ── Liquidity sweep flags (persist for one bar after the sweep) ──
 bool           g_buySideSweep;       // Buy-side liquidity swept (swing high taken)
 bool           g_sellSideSweep;      // Sell-side liquidity swept (swing low taken)
+bool           g_prevBuySideSweep;   // Previous bar's buy-side sweep (for MSS sequencing)
+bool           g_prevSellSideSweep;  // Previous bar's sell-side sweep (for MSS sequencing)
 
 // ── Pending FVG zones ──
 bool           g_pendingLong;
@@ -85,8 +87,10 @@ int OnInit()
    g_swingHighValid  = false;
    g_swingLowValid   = false;
 
-   g_buySideSweep    = false;
-   g_sellSideSweep   = false;
+   g_buySideSweep      = false;
+   g_sellSideSweep     = false;
+   g_prevBuySideSweep  = false;
+   g_prevSellSideSweep = false;
 
    g_pendingLong     = false;
    g_pendingShort    = false;
@@ -112,54 +116,56 @@ void OnDeinit(const int reason)
 //| TIMEZONE HELPERS                                                  |
 //+------------------------------------------------------------------+
 
-//--- Convert broker server time to EST hour.
-int GetESTHour(datetime serverTime)
+//--- Convert GMT time to EST hour.
+//    Uses TimeGMT() for accurate UTC reference, avoiding broker server timezone ambiguity.
+//    NOTE: InpESTOffset must be set to -5 (EST) or -4 (EDT) manually for DST transitions.
+int GetESTHour()
 {
    MqlDateTime dt;
-   TimeToStruct(serverTime, dt);
-   // Broker time is assumed to be UTC; adjust by EST offset.
-   // If your broker uses a different base, modify InpESTOffset accordingly.
+   TimeToStruct(TimeGMT(), dt);
    int h = (dt.hour + InpESTOffset + 24) % 24;
    return h;
 }
 
-//--- Convert broker server time to EST minute.
-int GetESTMinute(datetime serverTime)
+//--- Convert GMT time to EST minute.
+int GetESTMinute()
 {
    MqlDateTime dt;
-   TimeToStruct(serverTime, dt);
+   TimeToStruct(TimeGMT(), dt);
    return dt.min;
 }
 
 //--- True while inside the 10:00–11:00 EST setup window.
-bool IsInSession(datetime serverTime)
+bool IsInSession()
 {
-   int h = GetESTHour(serverTime);
+   int h = GetESTHour();
    return (h >= InpSessionStart && h < InpSessionEnd);
 }
 
 //--- True at or past 11:15 EST (time exit).
-bool IsPastTimeExit(datetime serverTime)
+bool IsPastTimeExit()
 {
-   int h = GetESTHour(serverTime);
-   int m = GetESTMinute(serverTime);
+   int h = GetESTHour();
+   int m = GetESTMinute();
    return (h > InpSessionEnd) || (h == InpSessionEnd && m >= InpTimeExitMin);
 }
 
 //+------------------------------------------------------------------+
 //| DAILY LOSS GUARDRAIL                                             |
 //+------------------------------------------------------------------+
-void CheckDailyReset(datetime serverTime)
+void CheckDailyReset()
 {
-   MqlDateTime dt;
-   TimeToStruct(serverTime, dt);
+   // Convert GMT to EST time for accurate trading-day boundary detection.
+   datetime estTime = TimeGMT() + InpESTOffset * 3600;
+   MqlDateTime estDt;
+   TimeToStruct(estTime, estDt);
 
-   // Reset at the start of a new calendar day (server time).
-   if(dt.day_of_year != g_lastDay)
+   // Reset at the start of a new EST calendar day.
+   if(estDt.day_of_year != g_lastDay)
    {
       g_dayStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
       g_dailyLossHit    = false;
-      g_lastDay         = dt.day_of_year;
+      g_lastDay         = estDt.day_of_year;
       Print("New day – daily P&L reset. Start balance=", g_dayStartBalance);
    }
 }
@@ -255,8 +261,14 @@ void DetectSwings()
    double highs[], lows[];
    ArraySetAsSeries(highs, true);
    ArraySetAsSeries(lows,  true);
-   CopyHigh(_Symbol, PERIOD_CURRENT, 0, barsNeeded + 2, highs);
-   CopyLow (_Symbol, PERIOD_CURRENT, 0, barsNeeded + 2, lows);
+   int copiedHighs = CopyHigh(_Symbol, PERIOD_CURRENT, 0, barsNeeded + 2, highs);
+   int copiedLows  = CopyLow (_Symbol, PERIOD_CURRENT, 0, barsNeeded + 2, lows);
+
+   if(copiedHighs < barsNeeded + 2 || copiedLows < barsNeeded + 2)
+   {
+      Print("DetectSwings: Insufficient data copied - highs=", copiedHighs, " lows=", copiedLows);
+      return;
+   }
 
    // The candidate bar is at index InpSwingLen (confirmed on both sides).
    int idx = InpSwingLen;
@@ -293,6 +305,10 @@ void DetectSwings()
 //+------------------------------------------------------------------+
 void DetectLiquiditySweeps(double barHigh, double barLow, double barClose)
 {
+   // Preserve previous bar's sweep state for MSS sequencing.
+   g_prevBuySideSweep  = g_buySideSweep;
+   g_prevSellSideSweep = g_sellSideSweep;
+
    g_buySideSweep  = false;
    g_sellSideSweep = false;
 
@@ -308,9 +324,8 @@ void DetectLiquiditySweeps(double barHigh, double barLow, double barClose)
 //+------------------------------------------------------------------+
 void ProcessStrategy()
 {
-   datetime serverTime = TimeCurrent();
-   bool inSession      = IsInSession(serverTime);
-   bool pastExit       = IsPastTimeExit(serverTime);
+   bool inSession      = IsInSession();
+   bool pastExit       = IsPastTimeExit();
 
    // ── Time Exit ──
    if(pastExit && CountPositions() > 0)
@@ -376,16 +391,14 @@ void ProcessStrategy()
    double bodySize       = MathAbs(barClose - barOpen);
    bool   isDisplacement = bodySize > atrVal * 0.5;
 
-   // ── 4. Bullish MSS: sell-side sweep 2 bars ago, current bar closes above prior high with displacement ──
-   //       (We check the sweep that occurred on bar[2] and MSS confirmation on bar[1])
-   //       We use persistent sweep flags so that the sweep from the prior call is checked here.
+   // ── 4. Bullish MSS: sell-side sweep detected on bar[2], bar[1] closes above bar[2].high with displacement ──
    bool bullishMSS = false;
-   if(g_sellSideSweep && barClose > highs[2] && isDisplacement && barClose > barOpen)
+   if(g_prevSellSideSweep && barClose > highs[2] && isDisplacement && barClose > barOpen)
       bullishMSS = true;
 
-   // ── 5. Bearish MSS: buy-side sweep 2 bars ago, current bar closes below prior low with displacement ──
+   // ── 5. Bearish MSS: buy-side sweep detected on bar[2], bar[1] closes below bar[2].low with displacement ──
    bool bearishMSS = false;
-   if(g_buySideSweep && barClose < lows[2] && isDisplacement && barClose < barOpen)
+   if(g_prevBuySideSweep && barClose < lows[2] && isDisplacement && barClose < barOpen)
       bearishMSS = true;
 
    // ── 6. Fair Value Gap detection (3-candle pattern) ──
@@ -476,10 +489,8 @@ void ProcessStrategy()
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   datetime serverTime = TimeCurrent();
-
-   // ── Daily reset check ──
-   CheckDailyReset(serverTime);
+   // ── Daily reset check (uses GMT internally for EST day boundary) ──
+   CheckDailyReset();
 
    // ── Update daily loss flag ──
    if(!g_dailyLossHit && IsDailyLossHit())
