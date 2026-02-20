@@ -1,0 +1,259 @@
+// ============================================================================
+// ICT Silver Bullet Strategy — Pine Script v5
+// Optimized for NQ (Nasdaq) and XAU (Gold)
+//
+// Core Logic:
+//   1. Only trade during the NY AM Silver Bullet window: 10:00–11:00 EST.
+//   2. Detect a Liquidity Sweep (swing-high or swing-low taken out).
+//   3. Confirm a Market Structure Shift (MSS) with displacement.
+//   4. Identify a Fair Value Gap (FVG) on the displacement leg.
+//   5. Enter on price retracing into that FVG.
+//   6. Stop Loss beyond the FVG / displacement extreme.
+//   7. Take Profit at 1:2 Risk-Reward.
+//   8. Hard 2 % daily-loss guardrail — halts trading for the day.
+//   9. Time exit at 11:15 AM EST for any open position.
+// ============================================================================
+
+//@version=5
+strategy("ICT Silver Bullet",
+     overlay          = true,
+     default_qty_type = strategy.percent_of_equity,
+     default_qty_value= 2,
+     initial_capital  = 100000,
+     currency         = currency.USD,
+     calc_on_every_tick = true,
+     process_orders_on_close = false)
+
+// ────────────────────────────────────────────────────────────────────────────
+// INPUTS
+// ────────────────────────────────────────────────────────────────────────────
+i_utcOffset     = input.int(-5,   "EST UTC Offset (−5 winter / −4 summer)",
+                     minval = -12, maxval = 14)
+i_sessionStart  = input.int(10,   "Session Start Hour (EST)", minval = 0, maxval = 23)
+i_sessionEnd    = input.int(11,   "Session End Hour (EST)",   minval = 0, maxval = 23)
+i_timeExitMin   = input.int(15,   "Time-Exit Minutes Past Session End", minval = 0, maxval = 59)
+i_swingLen      = input.int(5,    "Swing Detection Lookback", minval = 2, maxval = 50)
+i_rrRatio       = input.float(2.0,"Risk : Reward Ratio",      minval = 0.5, maxval = 10.0)
+i_maxDailyLoss  = input.float(2.0,"Max Daily Loss %",         minval = 0.1, maxval = 20.0)
+i_slBuffer      = input.float(0.5,"SL Buffer (ticks beyond FVG)", minval = 0.0, maxval = 50.0)
+
+// ────────────────────────────────────────────────────────────────────────────
+// TIMEZONE / SESSION HELPERS
+// ────────────────────────────────────────────────────────────────────────────
+// Convert the exchange-local bar time to EST hours & minutes.
+estHour()   => (hour + i_utcOffset + 24) % 24
+estMinute() => minute
+
+// True while inside the 10:00-11:00 EST setup window.
+isInSession() =>
+    h = estHour()
+    h >= i_sessionStart and h < i_sessionEnd
+
+// True at or past 11:15 EST — used for forced time exit.
+isPastTimeExit() =>
+    h = estHour()
+    m = estMinute()
+    (h > i_sessionEnd) or (h == i_sessionEnd and m >= i_timeExitMin)
+
+// True at the start of a new trading day (midnight EST).
+isNewDay() =>
+    estHour() == 0 and estHour()[1] != 0
+
+inSession   = isInSession()
+pastTimeExit = isPastTimeExit()
+
+// Colour the background during the Silver Bullet window.
+bgcolor(inSession ? color.new(color.blue, 93) : na, title = "SB Session")
+
+// ────────────────────────────────────────────────────────────────────────────
+// DAILY LOSS GUARDRAIL
+// ────────────────────────────────────────────────────────────────────────────
+// Track the equity at the start of each trading day.
+// If the drawdown since dayStartEquity exceeds i_maxDailyLoss%, halt trading.
+var float dayStartEquity = strategy.equity
+if isNewDay()
+    dayStartEquity := strategy.equity
+
+dailyPnL        = strategy.equity - dayStartEquity
+dailyLossLimit  = dayStartEquity * i_maxDailyLoss / 100.0
+isDailyLossHit  = dailyPnL <= -dailyLossLimit
+
+// ────────────────────────────────────────────────────────────────────────────
+// SWING HIGH / LOW DETECTION (Liquidity Levels)
+// ────────────────────────────────────────────────────────────────────────────
+// We keep rolling arrays of recent swing-highs and swing-lows.
+// A "liquidity sweep" occurs when price exceeds one of these levels.
+swingHigh = ta.pivothigh(high, i_swingLen, i_swingLen)
+swingLow  = ta.pivotlow(low,   i_swingLen, i_swingLen)
+
+// Persist the most recent swing levels for sweep comparison.
+var float lastSwingHigh = na
+var float lastSwingLow  = na
+
+if not na(swingHigh)
+    lastSwingHigh := swingHigh
+if not na(swingLow)
+    lastSwingLow := swingLow
+
+// ────────────────────────────────────────────────────────────────────────────
+// LIQUIDITY SWEEP DETECTION
+// ────────────────────────────────────────────────────────────────────────────
+// Buy-side sweep: price wicks above the last swing high then closes back below.
+buySideSweep = not na(lastSwingHigh) and high > lastSwingHigh and close < lastSwingHigh
+
+// Sell-side sweep: price wicks below the last swing low then closes back above.
+sellSideSweep = not na(lastSwingLow) and low < lastSwingLow and close > lastSwingLow
+
+// ────────────────────────────────────────────────────────────────────────────
+// MARKET STRUCTURE SHIFT (MSS) — Displacement Detection
+// ────────────────────────────────────────────────────────────────────────────
+// Bullish MSS: After a sell-side sweep, current bar closes above the prior
+//   bar's high with strong displacement (large body relative to ATR).
+// Bearish MSS: After a buy-side sweep, current bar closes below the prior
+//   bar's low with strong displacement.
+atrVal = ta.atr(14)
+bodySize = math.abs(close - open)
+isDisplacement = bodySize > atrVal * 0.5   // body > 50 % of ATR
+
+bullishMSS = sellSideSweep[1] and close > high[1] and isDisplacement and close > open
+bearishMSS = buySideSweep[1]  and close < low[1]  and isDisplacement and close < open
+
+// ────────────────────────────────────────────────────────────────────────────
+// FAIR VALUE GAP (FVG) DETECTION
+// ────────────────────────────────────────────────────────────────────────────
+// Bullish FVG (3-candle pattern):
+//   Gap between candle[2].high and candle[0].low  (candle[1] is the displacement).
+//   Valid when candle[0].low > candle[2].high.
+bullFVG_top    = low          // top of the bullish FVG (current bar low)
+bullFVG_bottom = high[2]      // bottom of the bullish FVG (2-bars-ago high)
+hasBullFVG     = bullFVG_top > bullFVG_bottom   // true gap exists
+
+// Bearish FVG:
+//   Gap between candle[0].high and candle[2].low.
+bearFVG_top    = low[2]       // top of the bearish FVG (2-bars-ago low)
+bearFVG_bottom = high         // bottom of the bearish FVG (current bar high)
+hasBearFVG     = bearFVG_top > bearFVG_bottom   // true gap exists
+
+// ────────────────────────────────────────────────────────────────────────────
+// ENTRY SIGNAL GENERATION
+// ────────────────────────────────────────────────────────────────────────────
+// We store pending FVG zones and wait for a retracement into them.
+var bool  pendingLong       = false
+var float longFVG_top       = na
+var float longFVG_bottom    = na
+var float longSLRef         = na     // displacement swing low for SL
+
+var bool  pendingShort      = false
+var float shortFVG_top      = na
+var float shortFVG_bottom   = na
+var float shortSLRef        = na     // displacement swing high for SL
+
+// Latch a new bullish FVG zone when a bullish MSS is confirmed inside the window.
+if bullishMSS and hasBullFVG and inSession and not isDailyLossHit
+    pendingLong    := true
+    longFVG_top    := bullFVG_top
+    longFVG_bottom := bullFVG_bottom
+    longSLRef      := low[1]         // displacement candle low
+
+// Latch a new bearish FVG zone when a bearish MSS is confirmed inside the window.
+if bearishMSS and hasBearFVG and inSession and not isDailyLossHit
+    pendingShort    := true
+    shortFVG_top    := bearFVG_top
+    shortFVG_bottom := bearFVG_bottom
+    shortSLRef      := high[1]       // displacement candle high
+
+// ── Long Entry: price retraces down into the bullish FVG ──
+longEntry = pendingLong and low <= longFVG_top and close >= longFVG_bottom and
+            inSession and not isDailyLossHit and strategy.position_size == 0
+
+// ── Short Entry: price retraces up into the bearish FVG ──
+shortEntry = pendingShort and high >= shortFVG_bottom and close <= shortFVG_top and
+             inSession and not isDailyLossHit and strategy.position_size == 0
+
+// ────────────────────────────────────────────────────────────────────────────
+// ORDER EXECUTION
+// ────────────────────────────────────────────────────────────────────────────
+tickSize = syminfo.mintick
+slBuf    = i_slBuffer * tickSize
+
+if longEntry
+    entryPrice = longFVG_top                       // enter at the top of the FVG zone
+    sl         = longFVG_bottom - slBuf             // SL just below the FVG
+    riskPts    = entryPrice - sl
+    tp         = entryPrice + riskPts * i_rrRatio   // 1:2 RR
+
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long TP/SL", "Long", stop = sl, limit = tp)
+
+    // Reset pending state.
+    pendingLong := false
+
+if shortEntry
+    entryPrice = shortFVG_bottom                   // enter at the bottom of the FVG zone
+    sl         = shortFVG_top + slBuf               // SL just above the FVG
+    riskPts    = sl - entryPrice
+    tp         = entryPrice - riskPts * i_rrRatio   // 1:2 RR
+
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short TP/SL", "Short", stop = sl, limit = tp)
+
+    // Reset pending state.
+    pendingShort := false
+
+// ────────────────────────────────────────────────────────────────────────────
+// TIME EXIT — Close all positions at 11:15 AM EST
+// ────────────────────────────────────────────────────────────────────────────
+if pastTimeExit and strategy.position_size != 0
+    strategy.close_all("Time Exit 11:15 EST")
+    pendingLong  := false
+    pendingShort := false
+
+// Reset pending orders when the session ends without a fill.
+if pastTimeExit
+    pendingLong  := false
+    pendingShort := false
+
+// ────────────────────────────────────────────────────────────────────────────
+// DAILY LOSS HIT — Close all positions immediately
+// ────────────────────────────────────────────────────────────────────────────
+if isDailyLossHit and strategy.position_size != 0
+    strategy.close_all("Daily Loss Limit")
+    pendingLong  := false
+    pendingShort := false
+
+// ────────────────────────────────────────────────────────────────────────────
+// VISUAL AIDS
+// ────────────────────────────────────────────────────────────────────────────
+plotshape(longEntry,  title = "Long Entry",  style = shape.triangleup,
+          location = location.belowbar, color = color.green, size = size.small)
+plotshape(shortEntry, title = "Short Entry", style = shape.triangledown,
+          location = location.abovebar, color = color.red,   size = size.small)
+
+plotshape(buySideSweep,  title = "Buy-Side Sweep",  style = shape.xcross,
+          location = location.abovebar, color = color.orange, size = size.tiny)
+plotshape(sellSideSweep, title = "Sell-Side Sweep", style = shape.xcross,
+          location = location.belowbar, color = color.purple, size = size.tiny)
+
+// Show the daily P&L status on the chart.
+plotchar(isDailyLossHit, title = "Daily Loss Hit", char = '✖',
+         location = location.top, color = color.red, size = size.tiny)
+
+// ────────────────────────────────────────────────────────────────────────────
+// INFO TABLE
+// ────────────────────────────────────────────────────────────────────────────
+var table infoTbl = table.new(position.top_right, 2, 4, bgcolor = color.new(color.black, 80))
+if barstate.islast
+    table.cell(infoTbl, 0, 0, "Daily P&L",      text_color = color.white)
+    table.cell(infoTbl, 1, 0, str.tostring(dailyPnL, "#.##"),
+               text_color = dailyPnL >= 0 ? color.green : color.red)
+    table.cell(infoTbl, 0, 1, "Loss Limit",      text_color = color.white)
+    table.cell(infoTbl, 1, 1, str.tostring(-dailyLossLimit, "#.##"), text_color = color.orange)
+    table.cell(infoTbl, 0, 2, "Halted?",          text_color = color.white)
+    table.cell(infoTbl, 1, 2, isDailyLossHit ? "YES" : "NO",
+               text_color = isDailyLossHit ? color.red : color.green)
+    table.cell(infoTbl, 0, 3, "Session",          text_color = color.white)
+    table.cell(infoTbl, 1, 3, inSession ? "ACTIVE" : "CLOSED",
+               text_color = inSession ? color.green : color.gray)
+// ============================================================================
+// END OF STRATEGY
+// ============================================================================
