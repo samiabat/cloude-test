@@ -53,6 +53,7 @@ bool           g_buySideSweep;       // Buy-side liquidity swept (swing high tak
 bool           g_sellSideSweep;      // Sell-side liquidity swept (swing low taken)
 int            g_barsSinceBuySweep;  // Bars since last buy-side sweep (for MSS lookback)
 int            g_barsSinceSellSweep; // Bars since last sell-side sweep (for MSS lookback)
+#define        SWEEP_NOT_DETECTED 999 // Sentinel: no sweep detected yet
 
 // ── Pending FVG zones ──
 bool           g_pendingLong;
@@ -94,8 +95,8 @@ int OnInit()
 
    g_buySideSweep      = false;
    g_sellSideSweep     = false;
-   g_barsSinceBuySweep = 999;
-   g_barsSinceSellSweep= 999;
+   g_barsSinceBuySweep = SWEEP_NOT_DETECTED;
+   g_barsSinceSellSweep= SWEEP_NOT_DETECTED;
 
    g_pendingLong     = false;
    g_pendingShort    = false;
@@ -406,12 +407,14 @@ void ProcessStrategy()
    bool   isDisplacement = bodySize > atrVal * InpDispMult;
 
    // ── 4. Bullish MSS: sell-side sweep within lookback window, bar[1] closes above bar[2].high with displacement ──
+   //       >= 1 ensures sweep and MSS are on different bars (counter 0 = sweep detected this bar).
    bool bullishMSS = false;
    if(g_barsSinceSellSweep >= 1 && g_barsSinceSellSweep <= InpSweepLookback &&
       barClose > highs[2] && isDisplacement && barClose > barOpen)
       bullishMSS = true;
 
    // ── 5. Bearish MSS: buy-side sweep within lookback window, bar[1] closes below bar[2].low with displacement ──
+   //       >= 1 ensures sweep and MSS are on different bars (counter 0 = sweep detected this bar).
    bool bearishMSS = false;
    if(g_barsSinceBuySweep >= 1 && g_barsSinceBuySweep <= InpSweepLookback &&
       barClose < lows[2] && isDisplacement && barClose < barOpen)

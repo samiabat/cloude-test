@@ -122,11 +122,13 @@ recentSellSweep = false
 for i = 1 to i_sweepLookback
     if sellSideSweep[i]
         recentSellSweep := true
+        break
 
 recentBuySweep = false
 for i = 1 to i_sweepLookback
     if buySideSweep[i]
         recentBuySweep := true
+        break
 
 // ────────────────────────────────────────────────────────────────────────────
 // MARKET STRUCTURE SHIFT (MSS) — Displacement Detection
