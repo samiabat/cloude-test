@@ -27,7 +27,7 @@ strategy("ICT Silver Bullet",
 // ────────────────────────────────────────────────────────────────────────────
 // INPUTS
 // ────────────────────────────────────────────────────────────────────────────
-i_utcOffset     = input.int(-5,   "EST UTC Offset (−5 winter / −4 summer)",
+i_utcOffset     = input.int(-5,   "EST UTC Offset (legacy — ignored when auto-TZ is used)",
                      minval = -12, maxval = 14)
 i_sessionStart  = input.int(10,   "Session Start Hour (EST)", minval = 0, maxval = 23)
 i_sessionEnd    = input.int(11,   "Session End Hour (EST)",   minval = 0, maxval = 23)
@@ -40,9 +40,9 @@ i_slBuffer      = input.float(0.5,"SL Buffer (ticks beyond FVG)", minval = 0.0, 
 // ────────────────────────────────────────────────────────────────────────────
 // TIMEZONE / SESSION HELPERS
 // ────────────────────────────────────────────────────────────────────────────
-// Convert the exchange-local bar time to EST hours & minutes.
-estHour()   => (hour + i_utcOffset + 24) % 24
-estMinute() => minute
+// Convert bar time to EST/EDT hours & minutes using IANA timezone (auto-DST).
+estHour()   => hour(time, "America/New_York")
+estMinute() => minute(time, "America/New_York")
 
 // True while inside the 10:00-11:00 EST setup window.
 isInSession() =>
@@ -55,9 +55,12 @@ isPastTimeExit() =>
     m = estMinute()
     (h > i_sessionEnd) or (h == i_sessionEnd and m >= i_timeExitMin)
 
-// True at the start of a new trading day (midnight EST).
+// True at the start of a new trading day (EST date change).
+// Uses date comparison instead of hour transition for robustness on coarser timeframes.
 isNewDay() =>
-    estHour() == 0 and estHour()[1] != 0
+    d  = dayofmonth(time, "America/New_York")
+    d1 = dayofmonth(time[1], "America/New_York")
+    not na(d1) and d != d1
 
 inSession   = isInSession()
 pastTimeExit = isPastTimeExit()
