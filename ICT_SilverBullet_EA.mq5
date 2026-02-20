@@ -71,6 +71,9 @@ bool           g_dailyLossHit;       // True when daily loss cap is breached
 // ── Bar tracking ──
 datetime       g_lastBarTime;        // Prevents processing the same bar twice
 
+// ── ATR indicator handle (created once, reused every bar) ──
+int            g_atrHandle;
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                    |
 //+------------------------------------------------------------------+
@@ -100,6 +103,13 @@ int OnInit()
    g_dailyLossHit   = false;
    g_lastBarTime     = 0;
 
+   g_atrHandle = iATR(_Symbol, PERIOD_CURRENT, 14);
+   if(g_atrHandle == INVALID_HANDLE)
+   {
+      Print("Failed to create ATR indicator handle");
+      return INIT_FAILED;
+   }
+
    Print("ICT Silver Bullet EA initialized. Magic=", InpMagicNumber);
    return INIT_SUCCEEDED;
 }
@@ -109,6 +119,8 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   if(g_atrHandle != INVALID_HANDLE)
+      IndicatorRelease(g_atrHandle);
    Print("ICT Silver Bullet EA removed. Reason=", reason);
 }
 
@@ -378,15 +390,9 @@ void ProcessStrategy()
    // ── 3. ATR for displacement check ──
    double atrBuf[];
    ArraySetAsSeries(atrBuf, true);
-   int atrHandle = iATR(_Symbol, PERIOD_CURRENT, 14);
-   if(atrHandle == INVALID_HANDLE) return;
-   if(CopyBuffer(atrHandle, 0, 1, 1, atrBuf) < 1)
-   {
-      IndicatorRelease(atrHandle);
+   if(CopyBuffer(g_atrHandle, 0, 1, 1, atrBuf) < 1)
       return;
-   }
    double atrVal = atrBuf[0];
-   IndicatorRelease(atrHandle);
 
    double bodySize       = MathAbs(barClose - barOpen);
    bool   isDisplacement = bodySize > atrVal * 0.5;
