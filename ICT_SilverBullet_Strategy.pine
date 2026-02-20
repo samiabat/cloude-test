@@ -27,8 +27,6 @@ strategy("ICT Silver Bullet",
 // ────────────────────────────────────────────────────────────────────────────
 // INPUTS
 // ────────────────────────────────────────────────────────────────────────────
-i_utcOffset     = input.int(-5,   "EST UTC Offset (legacy — ignored when auto-TZ is used)",
-                     minval = -12, maxval = 14)
 i_sessionStart  = input.int(10,   "Session Start Hour (EST)", minval = 0, maxval = 23)
 i_sessionEnd    = input.int(11,   "Session End Hour (EST)",   minval = 0, maxval = 23)
 i_timeExitMin   = input.int(15,   "Time-Exit Minutes Past Session End", minval = 0, maxval = 59)

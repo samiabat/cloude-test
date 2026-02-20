@@ -24,7 +24,7 @@
 //+------------------------------------------------------------------+
 //| INPUT PARAMETERS                                                 |
 //+------------------------------------------------------------------+
-input int      InpESTOffset      = -5;     // EST UTC offset (-5 winter, -4 summer)
+input int      InpESTOffset      = -5;     // EST UTC offset (-5 winter / -4 summer; adjust manually for DST)
 input int      InpSessionStart   = 10;     // Session start hour (EST)
 input int      InpSessionEnd     = 11;     // Session end hour (EST)
 input int      InpTimeExitMin    = 15;     // Minutes past session end for time exit
@@ -118,6 +118,7 @@ void OnDeinit(const int reason)
 
 //--- Convert GMT time to EST hour.
 //    Uses TimeGMT() for accurate UTC reference, avoiding broker server timezone ambiguity.
+//    NOTE: InpESTOffset must be set to -5 (EST) or -4 (EDT) manually for DST transitions.
 int GetESTHour()
 {
    MqlDateTime dt;
@@ -390,12 +391,12 @@ void ProcessStrategy()
    double bodySize       = MathAbs(barClose - barOpen);
    bool   isDisplacement = bodySize > atrVal * 0.5;
 
-   // ── 4. Bullish MSS: sell-side sweep on prior bar, current bar closes above prior high with displacement ──
+   // ── 4. Bullish MSS: sell-side sweep detected on bar[2], bar[1] closes above bar[2].high with displacement ──
    bool bullishMSS = false;
    if(g_prevSellSideSweep && barClose > highs[2] && isDisplacement && barClose > barOpen)
       bullishMSS = true;
 
-   // ── 5. Bearish MSS: buy-side sweep on prior bar, current bar closes below prior low with displacement ──
+   // ── 5. Bearish MSS: buy-side sweep detected on bar[2], bar[1] closes below bar[2].low with displacement ──
    bool bearishMSS = false;
    if(g_prevBuySideSweep && barClose < lows[2] && isDisplacement && barClose < barOpen)
       bearishMSS = true;
