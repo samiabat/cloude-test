@@ -33,6 +33,8 @@ input double   InpRRRatio        = 2.0;    // Risk:Reward ratio
 input double   InpMaxDailyLoss   = 2.0;    // Max daily loss (% of balance)
 input double   InpSLBufferPts    = 5.0;    // SL buffer in points beyond FVG
 input double   InpRiskPercent    = 2.0;    // Risk per trade (% of balance)
+input int      InpSweepLookback  = 5;      // Sweep-to-MSS max lookback bars
+input double   InpDispMult       = 0.5;    // Displacement ATR multiplier
 input int      InpMagicNumber    = 20240101; // Magic number for order identification
 
 //+------------------------------------------------------------------+
@@ -46,11 +48,11 @@ double         g_lastSwingLow;       // Most recent confirmed swing low
 bool           g_swingHighValid;
 bool           g_swingLowValid;
 
-// ── Liquidity sweep flags (persist for one bar after the sweep) ──
+// ── Liquidity sweep flags ──
 bool           g_buySideSweep;       // Buy-side liquidity swept (swing high taken)
 bool           g_sellSideSweep;      // Sell-side liquidity swept (swing low taken)
-bool           g_prevBuySideSweep;   // Previous bar's buy-side sweep (for MSS sequencing)
-bool           g_prevSellSideSweep;  // Previous bar's sell-side sweep (for MSS sequencing)
+int            g_barsSinceBuySweep;  // Bars since last buy-side sweep (for MSS lookback)
+int            g_barsSinceSellSweep; // Bars since last sell-side sweep (for MSS lookback)
 
 // ── Pending FVG zones ──
 bool           g_pendingLong;
@@ -92,8 +94,8 @@ int OnInit()
 
    g_buySideSweep      = false;
    g_sellSideSweep     = false;
-   g_prevBuySideSweep  = false;
-   g_prevSellSideSweep = false;
+   g_barsSinceBuySweep = 999;
+   g_barsSinceSellSweep= 999;
 
    g_pendingLong     = false;
    g_pendingShort    = false;
@@ -317,18 +319,24 @@ void DetectSwings()
 //+------------------------------------------------------------------+
 void DetectLiquiditySweeps(double barHigh, double barLow, double barClose)
 {
-   // Preserve previous bar's sweep state for MSS sequencing.
-   g_prevBuySideSweep  = g_buySideSweep;
-   g_prevSellSideSweep = g_sellSideSweep;
+   // Increment counters each bar.
+   g_barsSinceBuySweep++;
+   g_barsSinceSellSweep++;
 
    g_buySideSweep  = false;
    g_sellSideSweep = false;
 
    if(g_swingHighValid && barHigh > g_lastSwingHigh && barClose < g_lastSwingHigh)
+   {
       g_buySideSweep = true;
+      g_barsSinceBuySweep = 0;
+   }
 
    if(g_swingLowValid && barLow < g_lastSwingLow && barClose > g_lastSwingLow)
+   {
       g_sellSideSweep = true;
+      g_barsSinceSellSweep = 0;
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -395,16 +403,18 @@ void ProcessStrategy()
    double atrVal = atrBuf[0];
 
    double bodySize       = MathAbs(barClose - barOpen);
-   bool   isDisplacement = bodySize > atrVal * 0.5;
+   bool   isDisplacement = bodySize > atrVal * InpDispMult;
 
-   // ── 4. Bullish MSS: sell-side sweep detected on bar[2], bar[1] closes above bar[2].high with displacement ──
+   // ── 4. Bullish MSS: sell-side sweep within lookback window, bar[1] closes above bar[2].high with displacement ──
    bool bullishMSS = false;
-   if(g_prevSellSideSweep && barClose > highs[2] && isDisplacement && barClose > barOpen)
+   if(g_barsSinceSellSweep >= 1 && g_barsSinceSellSweep <= InpSweepLookback &&
+      barClose > highs[2] && isDisplacement && barClose > barOpen)
       bullishMSS = true;
 
-   // ── 5. Bearish MSS: buy-side sweep detected on bar[2], bar[1] closes below bar[2].low with displacement ──
+   // ── 5. Bearish MSS: buy-side sweep within lookback window, bar[1] closes below bar[2].low with displacement ──
    bool bearishMSS = false;
-   if(g_prevBuySideSweep && barClose < lows[2] && isDisplacement && barClose < barOpen)
+   if(g_barsSinceBuySweep >= 1 && g_barsSinceBuySweep <= InpSweepLookback &&
+      barClose < lows[2] && isDisplacement && barClose < barOpen)
       bearishMSS = true;
 
    // ── 6. Fair Value Gap detection (3-candle pattern) ──

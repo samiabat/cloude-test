@@ -52,7 +52,6 @@ The Pine strategy is configured for **Nasdaq (NQ/NAS)** and **Gold (XAU)** symbo
 ### Pine Script Inputs
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| EST UTC Offset | −5 | Timezone offset (−5 winter / −4 summer) |
 | Session Start Hour | 10 | Silver Bullet window start (EST) |
 | Session End Hour | 11 | Silver Bullet window end (EST) |
 | Time-Exit Minutes | 15 | Minutes past session end for forced exit |
@@ -60,6 +59,9 @@ The Pine strategy is configured for **Nasdaq (NQ/NAS)** and **Gold (XAU)** symbo
 | Risk:Reward Ratio | 2.0 | Take-profit multiplier |
 | Max Daily Loss % | 2.0 | Daily drawdown guardrail |
 | SL Buffer (ticks) | 0.5 | Additional SL distance beyond FVG |
+| Sweep-to-MSS Max Bars | 5 | Max bars between liquidity sweep and MSS |
+| Displacement ATR Multiplier | 0.5 | Minimum displacement body as fraction of ATR |
+| Restrict to NQ/XAU Only | false | When false, strategy works on any symbol |
 
 ### MQL5 Inputs
 | Parameter | Default | Description |
@@ -73,4 +75,6 @@ The Pine strategy is configured for **Nasdaq (NQ/NAS)** and **Gold (XAU)** symbo
 | InpMaxDailyLoss | 2.0 | Max daily loss % |
 | InpSLBufferPts | 5.0 | SL buffer in points |
 | InpRiskPercent | 2.0 | Risk per trade % |
+| InpSweepLookback | 5 | Max bars between liquidity sweep and MSS |
+| InpDispMult | 0.5 | Minimum displacement body as fraction of ATR |
 | InpMagicNumber | 20240101 | EA order identification |

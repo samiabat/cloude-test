@@ -34,6 +34,9 @@ i_swingLen      = input.int(5,    "Swing Detection Lookback", minval = 2, maxval
 i_rrRatio       = input.float(2.0,"Risk : Reward Ratio",      minval = 0.5, maxval = 10.0)
 i_maxDailyLoss  = input.float(2.0,"Max Daily Loss %",         minval = 0.1, maxval = 20.0)
 i_slBuffer      = input.float(0.5,"SL Buffer (ticks beyond FVG)", minval = 0.0, maxval = 50.0)
+i_sweepLookback = input.int(5,    "Sweep-to-MSS Max Bars",      minval = 1, maxval = 20)
+i_dispMult      = input.float(0.5,"Displacement ATR Multiplier", minval = 0.1, maxval = 2.0)
+i_filterSymbol  = input.bool(false,"Restrict to NQ/XAU Only")
 i_showSweepMarks= input.bool(false, "Show Sweep X Markers")
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -69,7 +72,7 @@ inSession   = isInSession()
 pastTimeExit = isPastTimeExit()
 isNasdaq = str.contains(str.upper(syminfo.ticker), "NQ") or str.contains(str.upper(syminfo.ticker), "NAS") or str.contains(str.upper(syminfo.ticker), "USTEC")
 isGold = str.contains(str.upper(syminfo.ticker), "XAU") or str.contains(str.upper(syminfo.ticker), "GOLD")
-canTrade = isNasdaq or isGold
+canTrade = not i_filterSymbol or isNasdaq or isGold
 barConfirmed = barstate.isconfirmed
 
 // Colour the background during the Silver Bullet window.
@@ -114,6 +117,17 @@ buySideSweep = barConfirmed and not na(lastSwingHigh) and high > lastSwingHigh a
 // Sell-side sweep: price wicks below the last swing low then closes back above.
 sellSideSweep = barConfirmed and not na(lastSwingLow) and low < lastSwingLow and close > lastSwingLow
 
+// Allow sweeps within a lookback window for MSS sequencing (not just [1]).
+recentSellSweep = false
+for i = 1 to i_sweepLookback
+    if sellSideSweep[i]
+        recentSellSweep := true
+
+recentBuySweep = false
+for i = 1 to i_sweepLookback
+    if buySideSweep[i]
+        recentBuySweep := true
+
 // ────────────────────────────────────────────────────────────────────────────
 // MARKET STRUCTURE SHIFT (MSS) — Displacement Detection
 // ────────────────────────────────────────────────────────────────────────────
@@ -123,10 +137,10 @@ sellSideSweep = barConfirmed and not na(lastSwingLow) and low < lastSwingLow and
 //   bar's low with strong displacement.
 atrVal = ta.atr(14)
 bodySize = math.abs(close - open)
-isDisplacement = bodySize > atrVal * 0.5   // body > 50% of ATR
+isDisplacement = bodySize > atrVal * i_dispMult
 
-bullishMSS = sellSideSweep[1] and close > high[1] and isDisplacement and close > open
-bearishMSS = buySideSweep[1]  and close < low[1]  and isDisplacement and close < open
+bullishMSS = recentSellSweep and close > high[1] and isDisplacement and close > open
+bearishMSS = recentBuySweep  and close < low[1]  and isDisplacement and close < open
 
 // ────────────────────────────────────────────────────────────────────────────
 // FAIR VALUE GAP (FVG) DETECTION
@@ -158,12 +172,16 @@ var float shortFVG_top      = na
 var float shortFVG_bottom   = na
 var float shortSLRef        = na     // displacement swing high for SL
 
+var int   longSetupBar      = -1     // bar_index where long FVG was latched
+var int   shortSetupBar     = -1     // bar_index where short FVG was latched
+
 // Latch a new bullish FVG zone when a bullish MSS is confirmed inside the window.
 if bullishMSS and hasBullFVG and inSession and not isDailyLossHit and canTrade
     pendingLong    := true
     longFVG_top    := bullFVG_top
     longFVG_bottom := bullFVG_bottom
     longSLRef      := low[1]         // displacement candle low
+    longSetupBar   := bar_index
 
 // Latch a new bearish FVG zone when a bearish MSS is confirmed inside the window.
 if bearishMSS and hasBearFVG and inSession and not isDailyLossHit and canTrade
@@ -171,12 +189,13 @@ if bearishMSS and hasBearFVG and inSession and not isDailyLossHit and canTrade
     shortFVG_top    := bearFVG_top
     shortFVG_bottom := bearFVG_bottom
     shortSLRef      := high[1]       // displacement candle high
+    shortSetupBar   := bar_index
 
-// ── Long Entry: price retraces down into the bullish FVG ──
-longEntry = pendingLong and low <= longFVG_top and high >= longFVG_bottom and inSession and not isDailyLossHit and canTrade and strategy.position_size == 0 and barConfirmed
+// ── Long Entry: price retraces down into the bullish FVG on a subsequent bar ──
+longEntry = pendingLong and bar_index > longSetupBar and low <= longFVG_top and high >= longFVG_bottom and inSession and not isDailyLossHit and canTrade and strategy.position_size == 0 and barConfirmed
 
-// ── Short Entry: price retraces up into the bearish FVG ──
-shortEntry = pendingShort and high >= shortFVG_bottom and low <= shortFVG_top and inSession and not isDailyLossHit and canTrade and strategy.position_size == 0 and barConfirmed
+// ── Short Entry: price retraces up into the bearish FVG on a subsequent bar ──
+shortEntry = pendingShort and bar_index > shortSetupBar and high >= shortFVG_bottom and low <= shortFVG_top and inSession and not isDailyLossHit and canTrade and strategy.position_size == 0 and barConfirmed
 
 // ────────────────────────────────────────────────────────────────────────────
 // ORDER EXECUTION
