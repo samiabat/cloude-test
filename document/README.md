@@ -9,7 +9,7 @@ This document lists strict review findings for logical flaws, array/buffer safet
 ### 1.1 MQL5: Sweep/MSS sequencing mismatch
 - **File:** `ICT_SilverBullet_EA.mq5`
 - **Lines:** around `294-304` and `379-389`
-- **Issue:** `DetectLiquiditySweeps()` resets and computes `g_sellSideSweep/g_buySideSweep` from the same closed bar used in MSS checks. But comments and strategy intent require sweep on the previous bar and MSS confirmation on the next bar.
+- **Issue:** `DetectLiquiditySweeps()` resets and computes `g_sellSideSweep/g_buySideSweep` from the same closed bar used in MSS checks. But comments and the strategy's intended behavior require a sweep on the previous bar and MSS confirmation on the next bar.
 - **Impact:** Signals can be evaluated on the wrong bar relationship, causing false entries or missed entries.
 
 ### 1.2 Pine: Time-based day reset can be skipped on some timeframes
@@ -23,7 +23,7 @@ This document lists strict review findings for logical flaws, array/buffer safet
 ### 2.1 MQL5: Missing return-value checks for copied arrays in swing detection
 - **File:** `ICT_SilverBullet_EA.mq5`
 - **Lines:** around `255-260`
-- **Issue:** `CopyHigh()` and `CopyLow()` return values are not validated in `DetectSwings()`. The loop then indexes arrays assuming full population.
+- **Issue:** `CopyHigh()` and `CopyLow()` return values (copied element counts) are not validated in `DetectSwings()` for errors or partial copies. The loop then indexes arrays assuming full population.
 - **Impact:** On partial/failed copy, array reads can become invalid and produce runtime "array out of range" behavior or stale data usage.
 
 ## 3) Timezone Bugs
