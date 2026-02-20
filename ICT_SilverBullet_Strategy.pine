@@ -113,7 +113,7 @@ sellSideSweep = not na(lastSwingLow) and low < lastSwingLow and close > lastSwin
 //   bar's low with strong displacement.
 atrVal = ta.atr(14)
 bodySize = math.abs(close - open)
-isDisplacement = bodySize > atrVal * 0.5   // body > 50 % of ATR
+isDisplacement = bodySize > atrVal * 0.5   // body > 50% of ATR
 
 bullishMSS = sellSideSweep[1] and close > high[1] and isDisplacement and close > open
 bearishMSS = buySideSweep[1]  and close < low[1]  and isDisplacement and close < open
